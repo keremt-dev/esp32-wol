@@ -1,0 +1,5 @@
+# local credentials (WiFi, tokens, target MAC) - never commit
+secrets.h
+
+# stray local notes
+*.txt
