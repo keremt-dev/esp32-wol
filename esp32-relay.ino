@@ -1,11 +1,12 @@
 // ESP32 WoL Relay - yerel agdaki uyuyan PC'yi internetten uyandirmak icin.
 //
 // Calisma mantigi (mevcut kurulumu bozmaz):
-//   Android WoL app (4G) -> your-host.duckdns.org:9 -> modem WAN:9
-//     -> modem forward -> ESP32 (192.168.0.5):9
+//   Android WoL app (4G) -> your-host.duckdns.org:<DIS_PORT> -> modem WAN
+//     -> modem forward (dis port != ic port olabilir!) -> ESP32 (192.168.0.5):9
 //     -> ESP yerel broadcast <aktif subnet>.255:9 -> uyuyan PC uyanir
 //
-// Modem ayari (Gelismis -> Yonlendirme): UDP, Dis 9 -> Lokal 192.168.0.5:9
+// Modem ayari (Gelismis -> Yonlendirme): UDP, Dis <DIS_PORT> (orn. 9999) -> Lokal 192.168.0.5:9
+// DIKKAT: Uyandirma istegini DIS porta gonder (orn. duckdns:9999), ic porta (9) degil.
 //
 // Loglama: healthchecks.io'ya 5 dk'da bir durum ping'i (15 dk susarsa alarm + son ping'lerde
 // rssi/heap gidisati) + NVS'te kalici olay halkasi (/log) -> arizanin WiFi'siz kismi da kayitli.
