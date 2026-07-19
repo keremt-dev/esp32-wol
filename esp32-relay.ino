@@ -42,6 +42,9 @@ const uint16_t WOL_PORT = 9;
 // DuckDNS: ESP 7/24 acik oldugu icin WAN IP degisse de hostname'i guncel tutar
 unsigned long lastDuck = 0;
 const unsigned long DUCK_INTERVAL = 300000UL;   // 5 dakika
+int duckLastCode = 0;             // son deneme HTTP kodu (-1 = baglanti acilamadi)
+bool duckLastOk = false;          // son deneme "OK" dondu mu (/health'te gorunur)
+unsigned long lastDuckOkMs = 0;   // son basarili guncellemenin zamani
 
 WiFiUDP udpIn, udpOut;
 WebServer http(80);
@@ -63,8 +66,23 @@ bool lastUdpMagic = false;
 IPAddress lastUdpRemote(0,0,0,0);
 
 // esp_reset_reason() planli ESP.restart() sebeplerini ayirt etmez; hepsi genelde "sw" gorunur.
-// RTC memory resetten sonra kalir, boylece /health icinde son planli restart nedeni gorunur.
-RTC_DATA_ATTR char lastRestartCause[24] = "unknown";
+// DIKKAT: RTC_DATA_ATTR yazilimsal resette SIFIRLANIR (yalnizca deep-sleep uyanisinda korunur) --
+// sahada "restartCause hep unknown, bootCount hep 1" olarak yakalandi. RTC_NOINIT_ATTR ise
+// sw/wdt/brownout resetlerinde kalir; ilk aciliste copluk icerdigi icin magic sayi ile dogrulanir.
+RTC_NOINIT_ATTR uint32_t rtcMagic;
+RTC_NOINIT_ATTR char lastRestartCause[24];
+RTC_NOINIT_ATTR uint32_t bootCount;        // guc kesilmedikce her acilista artar
+RTC_NOINIT_ATTR uint32_t wifiRetryCount;   // ardarda wifi_boot_timeout: NVS yerine RTC'de sayilir (flash asinmasin)
+RTC_NOINIT_ATTR uint32_t netDeadCount;     // ardarda net_dead restart (ISS kesintisinde backoff icin)
+const uint32_t RTC_MAGIC = 0x574F4C32;
+
+void rtcInit(){
+  if(rtcMagic != RTC_MAGIC){   // poweron / ilk flash: RTC icerigi gecersiz -> temizle
+    rtcMagic = RTC_MAGIC;
+    strcpy(lastRestartCause, "unknown");
+    bootCount = 0; wifiRetryCount = 0; netDeadCount = 0;
+  }
+}
 
 void setRestartCause(const char* cause){
   strncpy(lastRestartCause, cause, sizeof(lastRestartCause) - 1);
@@ -80,9 +98,7 @@ struct LogEvent { uint32_t boot; uint32_t epoch; uint32_t ms; int16_t rssi; uint
 struct LogRing  { uint8_t count; uint8_t head; uint8_t _pad[2]; LogEvent e[LOG_CAP]; };
 LogRing logs;
 
-RTC_DATA_ATTR uint32_t bootCount = 0;        // guc kesilmedikce her acilista artar (poweron'da sifirlanir)
-RTC_DATA_ATTR uint32_t wifiRetryCount = 0;   // ardarda wifi_boot_timeout: NVS yerine RTC'de sayilir (flash asinmasin)
-RTC_DATA_ATTR uint32_t netDeadCount = 0;     // ardarda net_dead restart (ISS kesintisinde backoff icin)
+// bootCount / wifiRetryCount / netDeadCount yukarida RTC_NOINIT_ATTR olarak tanimli
 
 void logLoad(){
   logStore.begin("wollog", false);
@@ -233,6 +249,10 @@ void handleHealth(){   // web arayuzunun "Role (ESP32)" gostergesi icin
              ",\"udpIn\":" + (udpInOk ? "true" : "false") +
              ",\"udpOut\":" + (udpOutOk ? "true" : "false") +
              ",\"watchdog\":" + (watchdogOk ? "true" : "false") +
+             ",\"bootCount\":" + String(bootCount) +
+             ",\"duckOk\":" + (duckLastOk ? "true" : "false") +
+             ",\"duckCode\":" + String(duckLastCode) +
+             ",\"msSinceDuckOk\":" + String(lastDuckOkMs == 0 ? 0 : millis() - lastDuckOkMs) +
              ",\"udpPackets\":" + String(udpPackets) +
              ",\"udpAccepted\":" + String(udpAccepted) +
              ",\"udpRejected\":" + String(udpRejected) +
@@ -276,9 +296,13 @@ void updateDuckDNS(){
   if(req.begin(client, url)){
     req.setConnectTimeout(5000); req.setTimeout(5000);   // DuckDNS takilirsa loop'u uzun bloklamasin
     int code = req.GET();
-    Serial.println("DuckDNS: HTTP " + String(code) + " -> " + req.getString()); // "OK" beklenir
+    String body = req.getString();
+    duckLastCode = code;
+    duckLastOk = (code == 200 && body.startsWith("OK"));
+    if(duckLastOk) lastDuckOkMs = millis();
+    Serial.println("DuckDNS: HTTP " + String(code) + " -> " + body); // "OK" beklenir
     req.end();
-  } else Serial.println("DuckDNS: baglanti acilamadi");
+  } else { duckLastCode = -1; duckLastOk = false; Serial.println("DuckDNS: baglanti acilamadi"); }
 }
 
 void connectWiFi(){
@@ -306,6 +330,7 @@ void connectWiFi(){
 
 void setup(){
   Serial.begin(115200);
+  rtcInit();                           // RTC_NOINIT alanlarini dogrula (ilk aciliste copluk icerir)
   bootCount++;
   logLoad();                           // NVS olay halkasini yukle (logEvent'ten ONCE sart)
   esp_reset_reason_t bootReason = esp_reset_reason();
@@ -382,7 +407,7 @@ void loop(){
     lastHc = millis();
     String body = String("up=") + (millis()/1000) + "s boot#" + bootCount + " rssi=" + WiFi.RSSI() +
                   " heap=" + ESP.getFreeHeap() + " maxBlock=" + ESP.getMaxAllocHeap() +
-                  " cause=" + lastRestartCause;
+                  " cause=" + lastRestartCause + " duck=" + (duckLastOk ? "ok" : "fail");
     if(hcPing(body)){ hcFails = 0; netDeadCount = 0; }
     else {
       hcFails++;
