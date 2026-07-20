@@ -36,6 +36,7 @@ IPAddress dns2    (1,1,1,1);
 
 IPAddress broadcastIP(192,168,0,255);
 const uint16_t WOL_PORT = 9;
+const uint16_t TARGET_CHECK_PORT = 3389;   // RDP: Windows login ekraninda bile dinler -> "PC acildi" sinyali
 
 // targetMac secrets.h'te tanimli (public repo'da gercek MAC yayinlamamak icin)
 
@@ -218,6 +219,22 @@ void sendMagic(const uint8_t* mac){
   broadcastBytes(p,102); Serial.println("-> Magic packet broadcast (" + broadcastIP.toString() + ":9)");
 }
 
+// PC acik mi? Yerel agdan RDP portuna TCP deneme. true = Windows en az login ekranina
+// kadar acilmis demektir (uyandirma sonrasi "gercekten acildi mi?" sorusunun uzaktan cevabi).
+bool pcOnline(){
+  WiFiClient c;
+  bool ok = c.connect(TARGET_IP, TARGET_CHECK_PORT, 1500);
+  c.stop();
+  return ok;
+}
+
+void handleStatus(){
+  cors();
+  bool on = pcOnline();
+  http.send(200, "application/json",
+    String("{\"pcOnline\":") + (on ? "true" : "false") + ",\"checkedPort\":" + TARGET_CHECK_PORT + "}");
+}
+
 void handleWake(){
   cors();
   if(http.arg("key")!=HTTP_KEY){ http.send(401,"text/plain","unauthorized"); return; }
@@ -349,9 +366,10 @@ void setup(){
   http.on("/health", handleHealth);
   http.on("/reboot", handleReboot);
   http.on("/log", handleLog);
+  http.on("/status", handleStatus);
   http.on("/", handleHealth);
   http.begin();
-  Serial.println("WoL relay hazir: UDP:9 dinleniyor + HTTP /wake + /health + /log aktif");
+  Serial.println("WoL relay hazir: UDP:9 dinleniyor + HTTP /wake + /health + /log + /status aktif");
   updateDuckDNS();   // acilista hemen guncelle
   // Acilis ping'i: "cihaz geri geldi" sinyali + reset sebebi healthchecks gecmisine yazilsin
   hcPing(String("boot: reset=") + resetReasonStr() + " cause=" + lastRestartCause +
@@ -407,7 +425,8 @@ void loop(){
     lastHc = millis();
     String body = String("up=") + (millis()/1000) + "s boot#" + bootCount + " rssi=" + WiFi.RSSI() +
                   " heap=" + ESP.getFreeHeap() + " maxBlock=" + ESP.getMaxAllocHeap() +
-                  " cause=" + lastRestartCause + " duck=" + (duckLastOk ? "ok" : "fail");
+                  " cause=" + lastRestartCause + " duck=" + (duckLastOk ? "ok" : "fail") +
+                  " pc=" + (pcOnline() ? "on" : "off");   // healthchecks gecmisinde PC'nin acik/kapali izi
     if(hcPing(body)){ hcFails = 0; netDeadCount = 0; }
     else {
       hcFails++;

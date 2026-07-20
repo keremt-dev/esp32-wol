@@ -11,6 +11,9 @@ const char* HTTP_KEY = "CHANGE_ME_LONG_RANDOM_KEY";
 // target PC MAC address (magic packets are validated and built from this)
 uint8_t targetMac[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
 
+// target PC LAN IP (used by /status to check if the PC is up; use a DHCP reservation)
+const char* TARGET_IP = "192.168.1.50";
+
 const char* DUCKDNS_DOMAIN = "your-duckdns-subdomain";
 const char* DUCKDNS_TOKEN = "your-duckdns-token";
 
